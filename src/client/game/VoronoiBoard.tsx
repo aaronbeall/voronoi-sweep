@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 export type Point = { x: number; y: number };
@@ -43,12 +43,12 @@ const mulberry32 = (seed: number) => {
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
-const pickPoints = (count: number, minDist: number, rng: () => number): Point[] => {
+const pickPoints = (count: number, minDist: number, rng: () => number, width: number, height: number): Point[] => {
   const pts: Point[] = [];
   let guard = 0;
   let currentMin = minDist;
   while (pts.length < count && guard < 12000) {
-    const p = { x: rng() * BOARD_W, y: rng() * BOARD_H };
+    const p = { x: rng() * width, y: rng() * height };
     if (pts.every((q) => dist(p, q) > currentMin)) pts.push(p);
     guard += 1;
     if (guard % 2500 === 0 && currentMin > 4) currentMin -= 1; // relax if stuck
@@ -134,17 +134,17 @@ const recomputeCounts = (tiles: Tile[]) => {
   }
 };
 
-const createBoard = (seed: number): Tile[] => {
+const createBoard = (seed: number, width: number, height: number): Tile[] => {
   const rng = mulberry32(seed);
-  const points = pickPoints(TILE_TARGET, MIN_SEPARATION, rng);
+  const points = pickPoints(TILE_TARGET, MIN_SEPARATION, rng, width, height);
   const polygons: Point[][] = [];
 
   for (let i = 0; i < points.length; i++) {
     let poly: Point[] = [
       { x: 0, y: 0 },
-      { x: BOARD_W, y: 0 },
-      { x: BOARD_W, y: BOARD_H },
-      { x: 0, y: BOARD_H },
+      { x: width, y: 0 },
+      { x: width, y: height },
+      { x: 0, y: height },
     ];
     for (let j = 0; j < points.length; j++) {
       if (i === j) continue;
@@ -216,9 +216,34 @@ type VoronoiBoardProps = {
 };
 
 export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) => {
-  const [tiles, setTiles] = useState<Tile[]>(() => createBoard(seed));
+  const [tiles, setTiles] = useState<Tile[]>([]);
   const [status, setStatus] = useState<GameStatus>('playing');
   const [moves, setMoves] = useState(0);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: BOARD_W, h: BOARD_H });
+
+  // Measure parent size and set dynamic board dimensions
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const w = Math.max(60, Math.round(width));
+      const h = Math.max(60, Math.round(height));
+      setDims({ w, h });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Build board whenever seed or dimensions change
+  useEffect(() => {
+    setTiles(createBoard(seed, dims.w, dims.h));
+    setStatus('playing');
+    setMoves(0);
+  }, [seed, dims.w, dims.h]);
 
   const mines = useMemo(() => tiles.filter((t) => t.mine).length, [tiles]);
   const flags = useMemo(() => tiles.filter((t) => t.state === 'flagged').length, [tiles]);
@@ -287,8 +312,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
   };
 
   const palette = (tile: Tile) => {
-    const x = tile.centroid.x / BOARD_W;
-    const y = tile.centroid.y / BOARD_H;
+    const x = tile.centroid.x / dims.w;
+    const y = tile.centroid.y / dims.h;
     const blend = (x + y) / 2;
     
     if (tile.state === 'hidden') {
@@ -310,7 +335,14 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
   };
 
   return (
-    <svg key={seed} className="w-full h-[520px] md:h-[620px]" viewBox={`0 0 ${BOARD_W} ${BOARD_H}`} role="presentation">
+    <div ref={containerRef} className="w-full h-full">
+      <svg
+        key={seed}
+        className="w-full h-full"
+        viewBox={`0 0 ${dims.w} ${dims.h}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="presentation"
+      >
       <defs>
         <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#6de0ff" stopOpacity="0.22" />
@@ -318,7 +350,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
           <stop offset="100%" stopColor="#f9f871" stopOpacity="0.28" />
         </linearGradient>
       </defs>
-      <rect x={0} y={0} width={BOARD_W} height={BOARD_H} fill="url(#glow)" rx={4} />
+      <rect x={0} y={0} width={dims.w} height={dims.h} fill="url(#glow)" rx={4} />
       
       {DEBUG && tiles.map((tile) => (
         <circle
@@ -335,6 +367,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
         const isFlagged = tile.state === 'flagged';
         const isHidden = tile.state === 'hidden';
         const isRevealed = tile.state === 'revealed' || tile.state === 'exploded';
+        // UI scale based on dynamic board size (baseline 120)
+        const ui = Math.max(1, Math.min(dims.w, dims.h) / 200);
         
         const getDotColor = (count: number) => {
           if (count === 1) return '#fbbf24'; // yellow
@@ -345,8 +379,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
         
         const renderDots = (count: number, cx: number, cy: number) => {
           const dotColor = getDotColor(count);
-          const radius = 1.2;
-          const spacing = 2.8;
+          const radius = 1.8 * ui;
+          const spacing = 3.2 * ui;
           
           if (count === 1) {
             return <circle cx={cx} cy={cy} r={radius} fill={dotColor} />;
@@ -410,7 +444,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
                 textAnchor="middle"
                 className="select-none pointer-events-none"
                 fill="#fff7d6"
-                fontSize={7}
+                fontSize={Math.round(8 * ui)}
                 fontWeight={700}
               >
                 ⚑
@@ -425,7 +459,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
                     textAnchor="middle"
                     className="select-none pointer-events-none"
                     fill="#0b0b0f"
-                    fontSize={9}
+                    fontSize={Math.round(13 * ui)}
                     fontWeight={700}
                     style={{ filter: 'drop-shadow(0 0 3px #ef4444) drop-shadow(0 0 6px #ef4444)' }}
                   >
@@ -441,6 +475,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
           </g>
         );
       })}
-    </svg>
+      </svg>
+    </div>
   );
 };

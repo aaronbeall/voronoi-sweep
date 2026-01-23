@@ -48,7 +48,7 @@ export const App = () => {
       </div>
 
       <div className="relative flex-1 flex items-center justify-center min-h-0">
-        <div className="glass w-full h-full rounded-2xl overflow-hidden p-4 flex items-center justify-center">
+        <div className="glass w-full h-full rounded-2xl overflow-hidden p-4">
           <VoronoiBoard key={seed} seed={seed} onState={handleState} onGameEnd={setStatus} />
         </div>
 
