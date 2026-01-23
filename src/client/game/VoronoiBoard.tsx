@@ -28,6 +28,7 @@ export const BOARD_H = 120;
 const TILE_TARGET = 44;
 const MIN_SEPARATION = 9;
 const MINE_RATIO = 0.22;
+const DEBUG = false;
 
 const mulberry32 = (seed: number) => {
   let t = seed >>> 0;
@@ -250,6 +251,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
     const next = tiles.map((t) => ({ ...t }));
     const target = next[id];
     if (!target || target.state === 'revealed') return;
+    // Prevent placing more flags than total mines
+    if (target.state === 'hidden' && flags >= mines) return;
     target.state = target.state === 'flagged' ? 'hidden' : 'flagged';
     updateGameState(next, moves);
   };
@@ -294,8 +297,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
       return { fill: `hsl(${hue} 45% 22%)`, stroke: 'rgba(255,255,255,0.12)' };
     }
     if (tile.state === 'flagged') {
-      // Orange/amber for flagged
-      return { fill: 'hsl(30 85% 55%)', stroke: 'rgba(255,255,255,0.18)' };
+      // Reddish orange for flagged
+      return { fill: 'hsl(15 90% 58%)', stroke: 'rgba(255,255,255,0.18)' };
     }
     if (tile.state === 'exploded') {
       // Bright red for exploded
@@ -317,8 +320,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
       </defs>
       <rect x={0} y={0} width={BOARD_W} height={BOARD_H} fill="url(#glow)" rx={4} />
       
-      {/* DEBUG: Draw seed points */}
-      {tiles.map((tile) => (
+      {DEBUG && tiles.map((tile) => (
         <circle
           key={`seed-${tile.id}`}
           cx={tile.seed.x}
@@ -333,12 +335,47 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
         const isFlagged = tile.state === 'flagged';
         const isHidden = tile.state === 'hidden';
         const isRevealed = tile.state === 'revealed' || tile.state === 'exploded';
-        const value = tile.mine ? '✦' : tile.count > 0 ? tile.count : '';
-        const textColor = '#0b0b0f';
         
-        // DEBUG: Calculate bounding box
-        const xs = tile.polygon.map(p => p.x);
-        const ys = tile.polygon.map(p => p.y);
+        const getDotColor = (count: number) => {
+          if (count === 1) return '#fbbf24'; // yellow
+          if (count === 2) return '#fb923c'; // orange
+          if (count === 3) return '#ef4444'; // red
+          return '#dc2626'; // deep red for 4+
+        };
+        
+        const renderDots = (count: number, cx: number, cy: number) => {
+          const dotColor = getDotColor(count);
+          const radius = 1.2;
+          const spacing = 2.8;
+          
+          if (count === 1) {
+            return <circle cx={cx} cy={cy} r={radius} fill={dotColor} />;
+          } else if (count === 2) {
+            return (
+              <>
+                <circle cx={cx - spacing/2} cy={cy} r={radius} fill={dotColor} />
+                <circle cx={cx + spacing/2} cy={cy} r={radius} fill={dotColor} />
+              </>
+            );
+          } else if (count === 3) {
+            return (
+              <>
+                <circle cx={cx} cy={cy - spacing/2} r={radius} fill={dotColor} />
+                <circle cx={cx - spacing/2} cy={cy + spacing/2} r={radius} fill={dotColor} />
+                <circle cx={cx + spacing/2} cy={cy + spacing/2} r={radius} fill={dotColor} />
+              </>
+            );
+          } else {
+            return (
+              <>
+                <circle cx={cx - spacing/2} cy={cy - spacing/2} r={radius} fill={dotColor} />
+                <circle cx={cx + spacing/2} cy={cy - spacing/2} r={radius} fill={dotColor} />
+                <circle cx={cx - spacing/2} cy={cy + spacing/2} r={radius} fill={dotColor} />
+                <circle cx={cx + spacing/2} cy={cy + spacing/2} r={radius} fill={dotColor} />
+              </>
+            );
+          }
+        };
 
         return (
           <g
@@ -359,7 +396,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
               points={tile.polygon.map((p) => `${p.x},${p.y}`).join(' ')}
               fill={colors.fill}
               stroke={colors.stroke}
-              strokeWidth={0.7}
+              strokeWidth={1}
             />
             <polygon
               points={tile.polygon.map((p) => `${p.x},${p.y}`).join(' ')}
@@ -379,18 +416,27 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
                 ⚑
               </text>
             )}
-            {isRevealed && value && !isFlagged && (
-              <text
-                x={tile.centroid.x}
-                y={tile.centroid.y + 1.5}
-                textAnchor="middle"
-                className="select-none pointer-events-none"
-                fill={textColor}
-                fontSize={8}
-                fontWeight={700}
-              >
-                {value}
-              </text>
+            {isRevealed && !isFlagged && (
+              <>
+                {tile.mine ? (
+                  <text
+                    x={tile.centroid.x}
+                    y={tile.centroid.y + 2}
+                    textAnchor="middle"
+                    className="select-none pointer-events-none"
+                    fill="#0b0b0f"
+                    fontSize={9}
+                    fontWeight={700}
+                    style={{ filter: 'drop-shadow(0 0 3px #ef4444) drop-shadow(0 0 6px #ef4444)' }}
+                  >
+                    💀
+                  </text>
+                ) : tile.count > 0 ? (
+                  <g className="select-none pointer-events-none">
+                    {renderDots(tile.count, tile.centroid.x, tile.centroid.y)}
+                  </g>
+                ) : null}
+              </>
             )}
           </g>
         );
