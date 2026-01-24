@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FaFlag, FaSkullCrossbones } from 'react-icons/fa';
 import clsx from 'clsx';
+import { IoSkullSharp } from 'react-icons/io5';
+import { CgDanger } from 'react-icons/cg';
+import { WiGaleWarning } from 'react-icons/wi';
 
 export type Point = { x: number; y: number };
 export type TileState = 'hidden' | 'flagged' | 'revealed' | 'exploded';
@@ -438,33 +442,28 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
               opacity={0.3}
             />
             {isFlagged && (
-              <text
-                x={tile.centroid.x}
-                y={tile.centroid.y + 1.5}
-                textAnchor="middle"
+              <g
                 className="select-none pointer-events-none"
-                fill="#fff7d6"
-                fontSize={Math.round(8 * ui)}
-                fontWeight={700}
+                transform={`translate(${tile.centroid.x}, ${tile.centroid.y})`}
+                style={{ filter: 'drop-shadow(0 0 3px rgba(255,80,80,0.6)) drop-shadow(0 0 6px rgba(255,80,80,0.4))' }}
               >
-                ⚑
-              </text>
+                <g transform={`translate(${-Math.round(10 * ui) / 2}, ${-Math.round(10 * ui) / 2})`}>
+                  <FaFlag size={Math.round(10 * ui)} color={'#fff7d6'} />
+                </g>
+              </g>
             )}
             {isRevealed && !isFlagged && (
               <>
                 {tile.mine ? (
-                  <text
-                    x={tile.centroid.x}
-                    y={tile.centroid.y + 2}
-                    textAnchor="middle"
+                  <g
                     className="select-none pointer-events-none"
-                    fill="#0b0b0f"
-                    fontSize={Math.round(13 * ui)}
-                    fontWeight={700}
+                    transform={`translate(${tile.centroid.x}, ${tile.centroid.y})`}
                     style={{ filter: 'drop-shadow(0 0 3px #ef4444) drop-shadow(0 0 6px #ef4444)' }}
                   >
-                    💀
-                  </text>
+                    <g transform={`translate(${-Math.round(14 * ui) / 2}, ${-Math.round(14 * ui) / 2})`}>
+                      <IoSkullSharp size={Math.round(14 * ui)} color={'#0b0b0f'} />
+                    </g>
+                  </g>
                 ) : tile.count > 0 ? (
                   <g className="select-none pointer-events-none">
                     {renderDots(tile.count, tile.centroid.x, tile.centroid.y)}
