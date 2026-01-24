@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FaSkullCrossbones, FaMousePointer, FaClock, FaTrophy, FaTimesCircle, FaRedo } from 'react-icons/fa';
 import { VoronoiBoard, type BoardSnapshot, type GameStatus } from './VoronoiBoard';
+import { useConfirm } from '../hooks/useConfirm';
 
 const { setInterval } = window;
 
 export const App = () => {
+  const { Confirm, confirm } = useConfirm();
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1_000_000_000));
   const [status, setStatus] = useState<GameStatus>('playing');
   const [moves, setMoves] = useState(0);
@@ -30,9 +32,16 @@ export const App = () => {
     };
   }, [status, moves]);
 
-  const reset = useCallback(() => {
+  const reset = useCallback(async () => {
     if (moves > 0 && status === 'playing') {
-      if (!confirm('Start a new board? Current progress will be lost.')) return;
+      const ok = await confirm({
+        title: 'Start a new board?',
+        message: 'Current progress will be lost.',
+        confirmText: 'New Board',
+        cancelText: 'Cancel',
+        tone: 'warn',
+      });
+      if (!ok) return;
     }
     setSeed(Math.floor(Math.random() * 1_000_000_000));
     setStatus('playing');
@@ -43,7 +52,7 @@ export const App = () => {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  }, [moves, status]);
+  }, [moves, status, confirm]);
 
   const handleState = useCallback((snap: BoardSnapshot) => {
     setStatus(snap.status);
@@ -97,7 +106,7 @@ export const App = () => {
           {status !== 'playing' && (
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20">
               <div
-                className={`glass backdrop-blur-md px-6 py-4 rounded-xl flex items-center gap-4 shadow-2xl ${
+                className={`glass backdrop-blur-md px-6 py-4 rounded-xl flex items-center gap-4 shadow-2xl anim-pop ${
                   status === 'won'
                     ? 'border-2 border-emerald-500/50 shadow-emerald-500/30'
                     : 'border-2 border-red-500/50 shadow-red-500/30'
@@ -127,6 +136,12 @@ export const App = () => {
           )}
         </div>
       </div>
+      {/* Global confirm overlay */}
+      <Confirm />
     </div>
   );
 };
+
+// Render confirm overlay at app root level
+// Note: This JSX needs to be mounted within the App tree; placing it here ensures availability.
+// The hook provides a component to include near the root; but TypeScript requires it within a component.
