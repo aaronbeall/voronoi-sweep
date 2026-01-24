@@ -384,7 +384,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
         const renderDots = (count: number, cx: number, cy: number) => {
           const dotColor = getDotColor(count);
           const radius = 1.8 * ui;
-          const spacing = 3.2 * ui;
+          const spacing = 3.8 * ui;
           
           if (count === 1) {
             return <circle cx={cx} cy={cy} r={radius} fill={dotColor} />;
