@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { FaFlag, FaSkullCrossbones } from 'react-icons/fa';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { FaFlag } from 'react-icons/fa';
 import clsx from 'clsx';
 import { IoSkullSharp } from 'react-icons/io5';
-import { CgDanger } from 'react-icons/cg';
-import { WiGaleWarning } from 'react-icons/wi';
 
 export type Point = { x: number; y: number };
 export type TileState = 'hidden' | 'flagged' | 'revealed' | 'exploded';
@@ -219,13 +217,33 @@ type VoronoiBoardProps = {
   onGameEnd: (status: GameStatus) => void;
 };
 
+// Physics state for each point: displacement from anchor and velocity
+type PhysicsPoint = {
+  x: number; // current position
+  y: number;
+  vx: number; // velocity
+  vy: number;
+  ax: number; // anchor (resting position)
+  ay: number;
+};
+
 export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) => {
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [status, setStatus] = useState<GameStatus>('playing');
   const [moves, setMoves] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: BOARD_W, h: BOARD_H });
 
+  // Physics simulation: display points that diverge from anchors
+  const physicsRef = useRef<PhysicsPoint[]>([]);
+  const [displayPoints, setDisplayPoints] = useState<Point[]>([]);
+
+  // Mouse state for proximity repulsion
+  const mouseRef = useRef<Point>({ x: -9999, y: -9999 });
+
+  // Ripple waves: { originX, originY, createdAt }
+  const ripplesRef = useRef<Array<{ ox: number; oy: number; t: number }>>([]);
   // Measure parent size and set dynamic board dimensions
   useEffect(() => {
     const el = containerRef.current;
@@ -242,12 +260,166 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
     return () => ro.disconnect();
   }, []);
 
+  // Track mouse position for interactive repulsion
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const handleMouseMove = (e: globalThis.MouseEvent) => {
+      const rect = svg.getBoundingClientRect();
+      const clientX = e.clientX - rect.left;
+      const clientY = e.clientY - rect.top;
+
+      // Map from client coords to SVG viewBox coords
+      const x = (clientX / rect.width) * dims.w;
+      const y = (clientY / rect.height) * dims.h;
+
+      mouseRef.current = { x, y };
+    };
+
+    svg.addEventListener('mousemove', handleMouseMove);
+    return () => svg.removeEventListener('mousemove', handleMouseMove);
+  }, [dims.w, dims.h]);
+
+  // Handle SVG click for ripple effect
+  const handleSVGClick = (e: MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const rect = svg.getBoundingClientRect();
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+
+    const x = (clientX / rect.width) * dims.w;
+    const y = (clientY / rect.height) * dims.h;
+
+    // Add ripple at this point
+    ripplesRef.current.push({ ox: x, oy: y, t: Date.now() });
+  };
+
   // Build board whenever seed or dimensions change
   useEffect(() => {
-    setTiles(createBoard(seed, dims.w, dims.h));
+    const newTiles = createBoard(seed, dims.w, dims.h);
+    setTiles(newTiles);
     setStatus('playing');
     setMoves(0);
+
+    // Initialize physics points to anchor at tile seeds
+    physicsRef.current = newTiles.map((tile) => ({
+      x: tile.seed.x,
+      y: tile.seed.y,
+      vx: 0,
+      vy: 0,
+      ax: tile.seed.x,
+      ay: tile.seed.y,
+    }));
+    setDisplayPoints(newTiles.map((t) => t.seed));
   }, [seed, dims.w, dims.h]);
+
+  // Physics animation loop: updates display points based on forces
+  useEffect(() => {
+    let rafId: number;
+
+    const animate = () => {
+      const physics = physicsRef.current;
+      if (!tiles.length || !physics.length) {
+        rafId = requestAnimationFrame(animate);
+        return;
+      }
+
+      const now = Date.now();
+      const dt = 0.016; // ~60fps time step in seconds
+      const mouseProxRadius = Math.min(dims.w, dims.h) * 0.15; // ~15% of board size
+      const mouseRepelForce = 80; // strength of mouse repulsion
+      const rippleSpeed = 120; // units per second
+      const rippleForce = 120; // force magnitude at ripple center
+      const rippeleDuration = 1200; // ms before ripple fades
+      const springK = 12; // spring stiffness (return to anchor)
+      const damping = 0.82; // velocity damping (friction)
+      const maxVel = 40; // clamp velocity
+
+      physics.forEach((pt) => {
+        let fx = 0;
+        let fy = 0;
+
+        // Spring force back to anchor
+        const dx = pt.ax - pt.x;
+        const dy = pt.ay - pt.y;
+        fx += dx * springK;
+        fy += dy * springK;
+
+        // Mouse proximity repulsion
+        const dmx = pt.x - mouseRef.current.x;
+        const dmy = pt.y - mouseRef.current.y;
+        const dMouse = Math.hypot(dmx, dmy);
+        if (dMouse < mouseProxRadius && dMouse > 1) {
+          const repelMag = (1 - dMouse / mouseProxRadius) * mouseRepelForce;
+          const nx = dmx / dMouse;
+          const ny = dmy / dMouse;
+          fx += nx * repelMag;
+          fy += ny * repelMag;
+        }
+
+        // Ripple forces with distance-based delays
+        ripplesRef.current.forEach((ripple) => {
+          const elapsed = (now - ripple.t) / 1000; // seconds
+          const rippleRadius = rippleSpeed * elapsed;
+          const drx = pt.x - ripple.ox;
+          const dry = pt.y - ripple.oy;
+          const dr = Math.hypot(drx, dry);
+
+          // Ripple wave: apply force to points near the wavefront, with delay based on distance
+          const rippleWidth = 20; // width of the ripple band
+          if (dr > 5 && dr < rippleRadius + rippleWidth) {
+            // Distance-based delay: ripple reaches this point after dr/rippleSpeed seconds
+            const pointDelay = dr / rippleSpeed;
+            const age = elapsed - pointDelay;
+
+            // Bell curve: force is strongest at the wavefront, decays quickly
+            if (age > 0 && age < rippleWidth / rippleSpeed) {
+              const strength = Math.cos((age / (rippleWidth / rippleSpeed)) * Math.PI * 0.5);
+              const mag = strength * rippleForce;
+              const nx = drx / dr;
+              const ny = dry / dr;
+              fx += nx * mag;
+              fy += ny * mag;
+            }
+          }
+        });
+
+        // Update velocity with damping
+        pt.vx = (pt.vx + fx * dt) * damping;
+        pt.vy = (pt.vy + fy * dt) * damping;
+
+        // Clamp velocity
+        const vMag = Math.hypot(pt.vx, pt.vy);
+        if (vMag > maxVel) {
+          pt.vx = (pt.vx / vMag) * maxVel;
+          pt.vy = (pt.vy / vMag) * maxVel;
+        }
+
+        // Update position
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+
+        // Clamp to board bounds with a small margin
+        const margin = 2;
+        pt.x = Math.max(margin, Math.min(dims.w - margin, pt.x));
+        pt.y = Math.max(margin, Math.min(dims.h - margin, pt.y));
+      });
+
+      // Remove old ripples
+      ripplesRef.current = ripplesRef.current.filter((r) => now - r.t < rippeleDuration);
+
+      // Update display points state (triggers re-render)
+      setDisplayPoints(physics.map((p) => ({ x: p.x, y: p.y })));
+
+      rafId = requestAnimationFrame(animate);
+    };
+
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  }, [tiles.length, dims.w, dims.h]);
 
   const mines = useMemo(() => tiles.filter((t) => t.mine).length, [tiles]);
   const flags = useMemo(() => tiles.filter((t) => t.state === 'flagged').length, [tiles]);
@@ -315,6 +487,51 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
     updateGameState(next, moves + 1);
   };
 
+  // Compute polygons for display points (for rendering)
+  // Map each display point back to its tile and use display point for Voronoi generation
+  const renderPolygons = useMemo(() => {
+    if (!displayPoints.length || !tiles.length) return [];
+
+    const bBox = { minX: 0, minY: 0, maxX: dims.w, maxY: dims.h };
+    const polys: Point[][] = [];
+
+    displayPoints.forEach((pt, i) => {
+      let poly: Point[] = [
+        { x: bBox.minX, y: bBox.minY },
+        { x: bBox.maxX, y: bBox.minY },
+        { x: bBox.maxX, y: bBox.maxY },
+        { x: bBox.minX, y: bBox.maxY },
+      ];
+
+      // Clip against all other display points
+      for (let j = 0; j < displayPoints.length; j++) {
+        if (i === j) continue;
+        const other = displayPoints[j]!;
+        const mx = (pt.x + other.x) / 2;
+        const my = (pt.y + other.y) / 2;
+        const dx = other.x - pt.x;
+        const dy = other.y - pt.y;
+        // Half-plane equation: points closer to pt satisfy dx*(x-mx) + dy*(y-my) <= 0
+        poly = clipHalfPlane(poly, dx, dy, dx * mx + dy * my);
+        if (!poly.length) break;
+      }
+
+      polys.push(poly);
+    });
+
+    return polys;
+  }, [displayPoints, tiles.length, dims.w, dims.h]);
+
+  // Compute centroids for display polygons (for icon positioning)
+  const displayCentroids = useMemo(() => {
+    return renderPolygons.map((poly) => {
+      if (!poly.length) return { x: 0, y: 0 };
+      const x = poly.reduce((sum, p) => sum + p.x, 0) / poly.length;
+      const y = poly.reduce((sum, p) => sum + p.y, 0) / poly.length;
+      return { x, y };
+    });
+  }, [renderPolygons]);
+
   const palette = (tile: Tile) => {
     const x = tile.centroid.x / dims.w;
     const y = tile.centroid.y / dims.h;
@@ -341,6 +558,8 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
   return (
     <div ref={containerRef} className="w-full h-full">
       <svg
+        ref={svgRef}
+        onClick={handleSVGClick}
         key={seed}
         className="w-full h-full"
         viewBox={`0 0 ${dims.w} ${dims.h}`}
@@ -356,17 +575,19 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
       </defs>
       <rect x={0} y={0} width={dims.w} height={dims.h} fill="url(#glow)" rx={4} />
       
-      {DEBUG && tiles.map((tile) => (
+      {DEBUG && displayPoints.map((pt, i) => (
         <circle
-          key={`seed-${tile.id}`}
-          cx={tile.seed.x}
-          cy={tile.seed.y}
+          key={`display-seed-${i}`}
+          cx={pt.x}
+          cy={pt.y}
           r={0.8}
-          fill={tile.mine ? 'red' : 'white'}
+          fill={tiles[i]?.mine ? 'red' : 'cyan'}
+          opacity={0.5}
         />
       ))}
       
       {tiles.map((tile) => {
+        const displayPoly = renderPolygons[tile.id] || [];
         const colors = palette(tile);
         const isFlagged = tile.state === 'flagged';
         const isHidden = tile.state === 'hidden';
@@ -431,20 +652,20 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
             }}
           >
             <polygon
-              points={tile.polygon.map((p) => `${p.x},${p.y}`).join(' ')}
+              points={displayPoly.map((p) => `${p.x},${p.y}`).join(' ')}
               fill={colors.fill}
               stroke={colors.stroke}
               strokeWidth={1}
             />
             <polygon
-              points={tile.polygon.map((p) => `${p.x},${p.y}`).join(' ')}
+              points={displayPoly.map((p) => `${p.x},${p.y}`).join(' ')}
               fill="url(#glow)"
               opacity={0.3}
             />
             {isFlagged && (
               <g
                 className="select-none pointer-events-none"
-                transform={`translate(${tile.centroid.x}, ${tile.centroid.y})`}
+                transform={`translate(${displayCentroids[tile.id]?.x || tile.centroid.x}, ${displayCentroids[tile.id]?.y || tile.centroid.y})`}
                 style={{ filter: 'drop-shadow(0 0 3px rgba(255,80,80,0.6)) drop-shadow(0 0 6px rgba(255,80,80,0.4))' }}
               >
                 <g transform={`translate(${-Math.round(10 * ui) / 2}, ${-Math.round(10 * ui) / 2})`}>
@@ -457,7 +678,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
                 {tile.mine ? (
                   <g
                     className="select-none pointer-events-none"
-                    transform={`translate(${tile.centroid.x}, ${tile.centroid.y})`}
+                    transform={`translate(${displayCentroids[tile.id]?.x || tile.centroid.x}, ${displayCentroids[tile.id]?.y || tile.centroid.y})`}
                     style={{ filter: 'drop-shadow(0 0 3px #ef4444) drop-shadow(0 0 6px #ef4444)' }}
                   >
                     <g transform={`translate(${-Math.round(14 * ui) / 2}, ${-Math.round(14 * ui) / 2})`}>
@@ -466,7 +687,7 @@ export const VoronoiBoard = ({ seed, onState, onGameEnd }: VoronoiBoardProps) =>
                   </g>
                 ) : tile.count > 0 ? (
                   <g className="select-none pointer-events-none">
-                    {renderDots(tile.count, tile.centroid.x, tile.centroid.y)}
+                    {renderDots(tile.count, displayCentroids[tile.id]?.x || tile.centroid.x, displayCentroids[tile.id]?.y || tile.centroid.y)}
                   </g>
                 ) : null}
               </>
